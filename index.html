@@ -1,0 +1,400 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+  <title>Learning WebCL, lesson 4</title>
+  <meta name="keywords" content="webcl, webgl, gpu, opencl, opengl" />
+  <meta name="description" content="WebCL extension for Firefox, providing direct GPU access from JavaScript" />
+  <link href="/default.css" rel="stylesheet" type="text/css" />
+</head>
+
+<body id="tutorial" >
+
+<div id="header">
+  <div id="logo">
+    <h1><a href="/index.html">WebCL</a></h1>
+  </div>  <!-- end div#logo -->
+  <div id="menu">
+    <ul>
+      <li><a href="/index.html" id="nav-home">Home</a></li>
+      <li><a href="/demos.html" id="nav-demos">Demos</a></li>
+      <li><a href="/tutorials/tutorials.html" id="nav-tutorial">Tutorial</a></li>
+      <li><a href="/docs/" target="_blank">Docs</a></li>
+      <li><a href="http://github.com/toaarnio/webcl-firefox" target="_blank">Code</a></li>
+    </ul>
+  </div> <!-- end div#menu -->
+</div> <!-- end div#header -->
+
+<div id="page">
+  <div id="page-bgtop">
+    <div id="content">
+
+      <div class="post box">
+            <div>
+              <span style="float:left;"><a href="./tutorial3.html">&lt;&lt; Lesson 3</a></span>
+              <!-- <span style="float:right;"><a href="">Lesson  &gt;&gt;</a></span> -->
+              <br/> <br/>
+            </div>
+            <h2 class="title">Lesson 4: Simple Image Processing</h2>
+            <div class="entry">
+            <p>The lesson describes how to do a simple image processing with WebCL. An image is shown in canvas element, data is acquired and processed in OpenCL device. Then, the data is returned back to canvas.
+            </p>
+<!--        <p><a href="./lesson4.html">Click here for live WebCL version.</a> -->
+            </p>
+            
+            <p> Let us start with desaturate algorithm and its kernel code shown below:
+            </p>
+            
+            <pre>
+&lt;script id="clProgramDesaturate" type="text/x-opencl"&gt;
+  __kernel void clDesaturate(__global const uchar4* src,
+                             __global uchar4* dst,
+                             uint width, 
+                             uint height)
+  {
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x &gt;= width || y &gt;= height) return;
+
+    int i = y * width + x;
+
+    uchar4 color = src[i];
+    uchar lum = (uchar)(0.30f * color.x + 0.59f * color.y + 0.11f * color.z);
+    dst[i] = (uchar4)(lum, lum, lum, 255);
+  }
+&lt;/script&gt;          
+            </pre>
+        
+            <script id="clProgramDesaturate" type="text/x-opencl"> 
+              __kernel void clDesaturate(__global const uchar4* src,
+                                         __global uchar4* dst,
+                                         uint width, 
+                                         uint height) {
+                int x = get_global_id(0);
+                int y = get_global_id(1);
+                if (x >= width || y >= height) return;
+
+                int i = y * width + x;
+
+                uchar4 color = src[i];
+                uchar lum = (uchar)(0.30f * color.x + 0.59f * color.y + 0.11f * color.z);
+                dst[i] = (uchar4)(lum, lum, lum, 255);
+              }
+            </script>
+        
+            <p>
+               The kernel code assumes to receive a single pixel as an RGBA vector, each color component having eight bits. The canvas element in HTML5 provides us such access and thus, image data needs to be drawn into canvas as shown below.
+            </p>
+        
+            <pre>
+function setupCanvas () {
+  try {
+    var canvasImg = document.getElementById("canvasImg");
+    var canvasImgCtx = canvasImg.getContext("2d");
+    var srcImg = document.getElementById("srcimg");
+    canvasImg.width = srcImg.width;
+    canvasImg.height = srcImg.height;
+    canvasImgCtx.drawImage (srcImg, 0, 0, srcImg.width, srcImg.height);
+  } catch(e) {
+    document.getElementById("output").innerHTML += 
+      "&lt;h3&gt;ERROR:&lt;/h3&gt;&lt;pre style=\"color:red;\"&gt;" + e.message + "&lt;/pre&gt;";
+    throw e;
+  }
+}
+            </pre>
+            
+            <p>
+               The host program resembles Lesson 3. Only differences are that input data, i.e., the pixel data of the canvas is read to our data object and work sizes are defined to be two dimensional, which is more natural for 2D image. The resulting host program is shown below.           
+            </p>
+            
+            <pre>
+function CL_desaturate () {
+
+  // All output is written to element by id "output"
+  var output = document.getElementById("output");
+  output.innerHTML = "";
+
+  try {
+
+    // First check if the WebCL extension is installed at all 
+    if (window.WebCL == undefined) {
+      alert("Unfortunately your system does not support WebCL. " +
+            "Make sure that you have both the OpenCL driver " +
+            "and the WebCL browser extension installed.");
+      return false;
+    }
+
+    // Get pixel data from canvas
+    var canvasImg = document.getElementById("canvasImg");
+    var canvasImgCtx = canvasImg.getContext("2d");
+    var width = canvasImg.width;
+    var height = canvasImg.height;
+    var pixels = canvasImgCtx.getImageData(0, 0, width, height);
+
+    // Dimm the existing canvas to highlight any errors we might get.
+    // This does not affect the already retrieved pixel data.
+    canvasImgCtx.fillStyle = "rgba(0,0,0,0.7)";
+    canvasImgCtx.fillRect(0, 0, width, height);
+    
+    // Setup WebCL context using the default device of the first available 
+    // platform
+    var platforms = WebCL.getPlatformIDs();     
+    var ctx = WebCL.createContextFromType ([WebCL.CL_CONTEXT_PLATFORM, 
+                                           platforms[0]],
+                                           WebCL.CL_DEVICE_TYPE_DEFAULT);
+
+    // Setup buffers
+    var imgSize = width * height;
+    output.innerHTML += "&lt;br&gt;Image size: " + imgSize + " pixels ("
+                     + width + " x " + height + ")";
+    var bufSize = imgSize * 4; // size in bytes
+    output.innerHTML += "&lt;br&gt;Buffer size: " + bufSize + " bytes";
+    
+    var bufIn = ctx.createBuffer (WebCL.CL_MEM_READ_ONLY, bufSize);
+    var bufOut = ctx.createBuffer (WebCL.CL_MEM_WRITE_ONLY, bufSize);
+
+     // Create and build program
+    var kernelSrc = loadKernel("clProgramDesaturate");
+    var program = ctx.createProgramWithSource(kernelSrc);
+    var devices = ctx.getContextInfo(WebCL.CL_CONTEXT_DEVICES);
+    try {
+      program.buildProgram ([devices[0]], "");
+    } catch(e) {
+      alert ("Failed to build WebCL program. Error "
+             + program.getProgramBuildInfo (devices[0], 
+                                            WebCL.CL_PROGRAM_BUILD_STATUS)
+             + ":  " + program.getProgramBuildInfo (devices[0], 
+                                                    WebCL.CL_PROGRAM_BUILD_LOG));
+      throw e;
+    }
+
+    // Create kernel and set arguments
+    var kernel = program.createKernel ("clDesaturate");
+    kernel.setKernelArg (0, bufIn);
+    kernel.setKernelArg (1, bufOut);
+    kernel.setKernelArg (2, width, WebCL.types.UINT);
+    kernel.setKernelArg (3, height, WebCL.types.UINT);
+
+    // Create command queue using the first available device
+    var cmdQueue = ctx.createCommandQueue (devices[0], 0);
+
+    // Write the buffer to OpenCL device memory
+    cmdQueue.enqueueWriteBuffer (bufIn, false, 0, bufSize, pixels.data, []);
+
+    // Init ND-range 
+    var localWS = [16,4];  
+    var globalWS = [Math.ceil (width / localWS[0]) * localWS[0], 
+                    Math.ceil (height / localWS[1]) * localWS[1]];
+    
+    output.innerHTML += "&lt;br&gt;work group dimensions: " + globalWS.length;
+    for (var i = 0; i &lt; globalWS.length; ++i)
+      output.innerHTML += "&lt;br&gt;global work item size[" + i + "]: " + globalWS[i];
+    for (var i = 0; i &lt; localWS.length; ++i)
+      output.innerHTML += "&lt;br&gt;local work item size[" + i + "]: " + localWS[i];
+    
+    // Execute (enqueue) kernel
+    cmdQueue.enqueueNDRangeKernel(kernel, globalWS.length, [], 
+                                  globalWS, localWS, []);
+
+    // Read the result buffer from OpenCL device
+    cmdQueue.enqueueReadBuffer (bufOut, false, 0, bufSize, pixels.data, []);
+    cmdQueue.finish (); //Finish all the operations
+    
+    canvasImgCtx.putImageData (pixels, 0, 0);
+
+    output.innerHTML += "&lt;br&gt;Done.";
+  } catch(e) {
+    document.getElementById("output").innerHTML += 
+      "&lt;h3&gt;ERROR:&lt;/h3&gt;&lt;pre style=\"color:red;\"&gt;" + e.message + "&lt;/pre&gt;";
+    throw e;
+  }
+}     
+            </pre>
+                
+            <script type="text/javascript">
+              function setupCanvas () {
+                try {
+                  var canvasImg = document.getElementById("canvasImg");
+                  var canvasImgCtx = canvasImg.getContext("2d");
+                  var srcImg = document.getElementById("srcimg");
+                  canvasImg.width = srcImg.width;
+                  canvasImg.height = srcImg.height;
+                  canvasImgCtx.drawImage (srcImg, 0, 0, srcImg.width, srcImg.height);
+                } catch(e) {
+                  document.getElementById("output").innerHTML += "<h3>ERROR:</h3><pre style=\"color:red;\">" + e.message + "</pre>";
+                  throw e;
+                }
+              }
+
+              function loadKernel(id){
+                var kernelElement = document.getElementById(id);
+                var kernelSource = kernelElement.text;
+                if (kernelElement.src != "") {
+                    var mHttpReq = new XMLHttpRequest();
+                    mHttpReq.open("GET", kernelElement.src, false);
+                    mHttpReq.send(null);
+                    kernelSource = mHttpReq.responseText;
+                } 
+                return kernelSource;
+              }
+
+              function CL_desaturate () {
+              
+                // All output is written to element by id "output"
+                var output = document.getElementById("output");
+                output.innerHTML = "";
+
+                try {
+
+                  // First check if the WebCL extension is installed at all 
+                  if (window.WebCL == undefined) {
+                    alert("Unfortunately your system does not support WebCL. " +
+                          "Make sure that you have both the OpenCL driver " +
+                          "and the WebCL browser extension installed.");
+                    return false;
+                  }
+
+                  // Get pixel data from canvas
+                  var canvasImg = document.getElementById("canvasImg");
+                  var canvasImgCtx = canvasImg.getContext("2d");
+                  var width = canvasImg.width;
+                  var height = canvasImg.height;
+                  var pixels = canvasImgCtx.getImageData(0, 0, width, height);
+
+                  // Dimm the existing canvas to highlight any errors we might get.
+                  // This does not affect the already retrieved pixel data.
+                  canvasImgCtx.fillStyle = "rgba(0,0,0,0.7)";
+                  canvasImgCtx.fillRect(0, 0, width, height);
+                  
+                  // Setup WebCL context using the default device of the first available platform
+                  var platforms = WebCL.getPlatformIDs();     
+                  var ctx = WebCL.createContextFromType ([WebCL.CL_CONTEXT_PLATFORM, platforms[0]],
+                                                          WebCL.CL_DEVICE_TYPE_DEFAULT);
+
+                  // Setup buffers
+                  var imgSize = width * height;
+                  output.innerHTML += "<br>Image size: " + imgSize + " pixels ("
+                                   + width + " x " + height + ")";
+                  var bufSize = imgSize * 4; // size in bytes
+                  output.innerHTML += "<br>Buffer size: " + bufSize + " bytes";
+                  
+                  var bufIn = ctx.createBuffer (WebCL.CL_MEM_READ_ONLY, bufSize);
+                  var bufOut = ctx.createBuffer (WebCL.CL_MEM_WRITE_ONLY, bufSize);
+
+                   // Create and build program
+                  var kernelSrc = loadKernel("clProgramDesaturate");
+                  var program = ctx.createProgramWithSource(kernelSrc);
+                  var devices = ctx.getContextInfo(WebCL.CL_CONTEXT_DEVICES);
+                  try {
+                    program.buildProgram ([devices[0]], "");
+                  } catch(e) {
+                    alert ("Failed to build WebCL program. Error "
+                           + program.getProgramBuildInfo (devices[0], WebCL.CL_PROGRAM_BUILD_STATUS)
+                           + ":  " + program.getProgramBuildInfo (devices[0], WebCL.CL_PROGRAM_BUILD_LOG));
+                    throw e;
+                  }
+
+                  // Create kernel and set arguments
+                  var kernel = program.createKernel ("clDesaturate");
+                  kernel.setKernelArg (0, bufIn);
+                  kernel.setKernelArg (1, bufOut);
+                  kernel.setKernelArg (2, width, WebCL.types.UINT);
+                  kernel.setKernelArg (3, height, WebCL.types.UINT);
+
+                  // Create command queue using the first available device
+                  var cmdQueue = ctx.createCommandQueue (devices[0], 0);
+
+                  // Write the buffer to OpenCL device memory
+                  cmdQueue.enqueueWriteBuffer (bufIn, false, 0, bufSize, pixels.data, []);
+
+                  // Init ND-range 
+                  var localWS = [16,4];  
+                  var globalWS = [Math.ceil (width / localWS[0]) * localWS[0], 
+                                  Math.ceil (height / localWS[1]) * localWS[1]];
+                  
+                  output.innerHTML += "<br>work group dimensions: " + globalWS.length;
+                  for (var i = 0; i < globalWS.length; ++i)
+                    output.innerHTML += "<br>global work item size[" + i + "]: " + globalWS[i];
+                  for (var i = 0; i < localWS.length; ++i)
+                    output.innerHTML += "<br>local work item size[" + i + "]: " + localWS[i];
+                  
+                  // Execute (enqueue) kernel
+                  cmdQueue.enqueueNDRangeKernel(kernel, globalWS.length, [], globalWS, localWS, []);
+
+                  // Read the result buffer from OpenCL device
+                  cmdQueue.enqueueReadBuffer (bufOut, false, 0, bufSize, pixels.data, []);
+                  cmdQueue.finish (); //Finish all the operations
+                  
+                  canvasImgCtx.putImageData (pixels, 0, 0);
+
+                  output.innerHTML += "<br>Done.";
+                } catch(e) {
+                  document.getElementById("output").innerHTML += "<h3>ERROR:</h3><pre style=\"color:red;\">" + e.message + "</pre>";
+                  throw e;
+                }
+              }
+            </script>
+        
+              <div><input type="button" value="Run Lesson 4" onclick="CL_desaturate ()"></div>
+              <br/>
+              <img id="srcimg" src="lenna-256.jpg" style="display:none;" onload="setupCanvas ();">
+              <canvas id="canvasImg" width='256' height='256'></canvas>
+
+              <div id="output"> </div>
+              
+              <div>
+                <br/> <br/>
+                <span style="float:left;"><a href="./tutorial3.html">&lt;&lt; Lesson 3</a></span>
+                <!-- <span style="float:right;"><a href="">Lesson  &gt;&gt;</a></span> -->
+                <br/>
+              </div>
+        
+            </div>
+      </div>
+
+    </div>
+    <!-- end div#content -->
+
+    <div id="sidebar">
+
+      <div class="box">
+        <ul>
+          <li>
+            <h2>Tutorial</h2>
+            <ul>
+              <li><a href="./tutorials.html">Introduction</a></li>
+              <li><a href="./tutorial1.html">Lesson 1</a></li>
+              <li><a href="./tutorial2.html">Lesson 2</a></li>
+              <li><a href="./tutorial3.html">Lesson 3</a></li>
+              <li><a href="./tutorial4.html">Lesson 4</a></li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+
+    </div>
+    <!-- end div#sidebar -->
+    <div style="clear: both; height: 1px"></div>
+  </div>
+</div> <!-- end div#page -->
+
+<div id="footer-wrapper">
+  <div id="footer">
+    <p id="legal">Copyright &copy; 2011 NRC Tampere. All Rights Reserved. Web design based on <a href="http://www.freecsstemplates.org/">Free CSS Templates</a>.</p>
+  </div>
+</div> <!-- end div#footer-wrapper -->
+
+
+
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-22607782-1']);
+  _gaq.push(['_trackPageview']);
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>
