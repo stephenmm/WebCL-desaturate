@@ -17,9 +17,9 @@ Dependencies
 Installation and Running
 =========================
 
-  git clone https://github.com/stephenmm/WebCL-desaturate.git
-  cd WebCL-desaturate
-  firefox $PWD/index.html
+    git clone https://github.com/stephenmm/WebCL-desaturate.git
+    cd WebCL-desaturate
+    firefox $PWD/index.html
 
 
 
